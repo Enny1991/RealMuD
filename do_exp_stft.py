@@ -15,7 +15,7 @@ from logger import Logger
 import getpass
 
 # prepare exp folder
-from model_stft import Mud
+from model_stft import Mud, Mudv2
 from train_test import train, test
 
 if getpass.getuser() == 'enea':
@@ -66,13 +66,13 @@ def main(args):
     print("Preparing Loaders...")
 
     train_loader = DataLoader(
-        data_utils.MudNoise(training_data_path,  noisedir='/Data/DATASETS/NoiseX/8k/', task='tr'),
+        data_utils.MudNoise(training_data_path,  noisedir='/Data/DATASETS/NoiseX/8k/', task='tr', n_ch=6),
         batch_size=args.batch_size,
         shuffle=True,
         **kwargs)
 
     validation_loader = DataLoader(
-        data_utils.MudNoise(validation_data_path, noisedir='/Data/DATASETS/NoiseX/8k/', task='cv'),
+        data_utils.MudNoise(validation_data_path, noisedir='/Data/DATASETS/NoiseX/8k/', task='cv', n_ch=6),
         batch_size=args.batch_size,
         shuffle=False,
         **kwargs)
@@ -83,7 +83,7 @@ def main(args):
     # define model
 
     model = Mud(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
-                layers=args.layers, stacks=args.stacks)
+                  layers=args.layers, stacks=args.stacks)
 
     if args.load is not None:
         print("Loading model {}".format(args.load))
@@ -171,7 +171,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='tasnet-enhancement')
-    parser.add_argument('--batch-size', type=int, default=4,
+    parser.add_argument('--batch-size', type=int, default=2,
                         help='input batch size for training')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train')

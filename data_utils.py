@@ -136,7 +136,7 @@ def norm_mc_noise(x, noise, verbose):
 
 
 class MudNoise(Dataset):
-    def __init__(self, path, noisedir, task='tr', seed=42, max_len=32000, verbose=False):
+    def __init__(self, path, noisedir, task='tr', seed=42, max_len=32000, verbose=False,n_ch=6):
         super(MudNoise, self).__init__()
 
         random.seed(seed)
@@ -159,13 +159,14 @@ class MudNoise(Dataset):
 
         self.noises = noises
         self.verbose = verbose
+        self.n_ch = n_ch
 
     def __getitem__(self, index):
 
         divider = 2000 if self.task == 'tr' else 1000
         subset = index // divider
         ii = index % divider
-        s = self.data[self.task + "{}".format(subset)][ii][:, :self.max_len]
+        s = self.data[self.task + "{}".format(subset)][ii][:self.n_ch, :self.max_len]
         while np.mean(np.abs(s[0])) == 0:
             index = np.random.choice(self.len)
             subset = index // divider
