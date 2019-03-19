@@ -148,8 +148,8 @@ class MudNoise(Dataset):
         self.data = h5py.File(path, 'r')
 
         # self.len = 5000 if task == 'tr' else 1000
-        self.len = 20000 if task == 'tr' else 5000
-        # self.len = 200 if task == 'tr' else 50
+        # self.len = 20000 if task == 'tr' else 5000
+        self.len = 200 if task == 'tr' else 50
 
         noises = []
         wav_files = [f for f in os.listdir(noisedir) if 'wav' in f]
