@@ -185,6 +185,7 @@ class CausalConv2d(torch.nn.Conv2d):
 
     def forward(self, input):
         result = super(CausalConv2d, self).forward(input)
+        print("\tconv --")
         if self.__padding[0] != 0:
             return result[:, :, :-self.__padding[0]]
         return result
@@ -340,6 +341,89 @@ class Mudv2(nn.Module):
         return output
 
 
+class MudNoFFT(nn.Module):
+    def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=32, sep_ch=64, kernel=(3, 3), causal=False, layers=6,
+                 stacks=2, verbose=True):
+        super(MudNoFFT, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+        self.BN_channel = bn_ch
+        self.conv_channel = sep_ch
+        self.kernel = kernel
+        self.conv_pad = (int(np.log2((self.kernel[0] - 1) / 2)), int(np.log2((self.kernel[1] - 1) / 2)))
+
+        self.enc_LN = tLN(2)
+        self.BN = nn.Conv2d(2, self.BN_channel, (1, 1))
+
+        self.compression = nn.Parameter(torch.ones(1, ) * -0.8475, requires_grad=learn_comp)  # sigmoid(-0.8475) = 0.3
+        if verbose:
+            print("Compression: {}".format(torch.sigmoid(self.compression)))
+        self.layer = layers
+        self.stack = stacks
+
+        self.receptive_field_time = 0
+        self.receptive_field_freq = 0
+        self.conv = nn.ModuleList([])
+        for s in range(self.stack):
+            for i in range(self.layer):
+                self.conv.append(DepthConv2d(self.BN_channel, self.conv_channel,
+                                             self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                             padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
+                if s == 0 and i == 0:
+                    self.receptive_field_time += self.kernel[0]
+                    self.receptive_field_freq += self.kernel[1]
+                else:
+                    self.receptive_field_time += (self.kernel[0] - 1) * 2 ** i
+                    self.receptive_field_freq += (self.kernel[1] - 1) * 2 ** i
+
+        if verbose:
+            print('Receptive field TIME: {:1d} samples.'.format(self.receptive_field_time))
+            print('Receptive field FREQ: {:1d} samples.'.format(self.receptive_field_freq))
+
+        self.reshape_env = nn.Sequential(nn.Conv1d(1, self.n_fft, 1),
+                                         # nn.ReLU()
+                                         )
+        if verbose:
+            print(self.reshape_env)
+
+        self.reshape_speech = nn.Sequential(nn.Conv2d(self.BN_channel, 1, (1, 1)), nn.Sigmoid())
+
+        self.eps = 1e-8
+
+    def forward(self, x):
+        # x = (B, 2, F, L)
+        
+        x_stft = x
+
+        feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
+        # mask estimation
+        print("Mask estimation")
+        this_input = feat
+        skip_connection = 0.
+        for i in range(len(self.conv)):
+            print("CONV {}".format(i))
+            this_output = self.conv[i](this_input)
+            skip_connection = skip_connection + this_output
+            this_input = this_input + this_output
+        
+        print("Reshape")
+        mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
+
+        return mask_speech
+
+
+def compress(x, compression=0.3):
+    # x: b, f, t, 2
+    mag = torch.sqrt(x[..., 0] ** 2 + x[..., 1] ** 2 + 1e-15)
+    ang = torch.atan2(x[..., 1], x[..., 0])
+    re = (mag ** compression) * torch.cos(ang)
+    im = (mag ** compression) * torch.sin(ang)
+    return torch.cat([re.unsqueeze(3), im.unsqueeze(3)], 3)
+
+
 class Mud(nn.Module):
     def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=32, sep_ch=64, kernel=(3, 3), causal=False, layers=6,
                  stacks=2, verbose=True):
@@ -470,14 +554,3 @@ class Mud(nn.Module):
         # output = my_istft(filtered.permute(0, 1, 3, 2), hop_length=self.HOP, cuda=filtered.is_cuda)  # B, T
 
         return output
-
-
-def compress(x, compression=0.3):
-    # x: b, f, t, 2
-    mag = torch.sqrt(x[..., 0] ** 2 + x[..., 1] ** 2 + 1e-15)
-    ang = torch.atan2(x[..., 1], x[..., 0])
-    re = (mag ** compression) * torch.cos(ang)
-    im = (mag ** compression) * torch.sin(ang)
-    return torch.cat([re.unsqueeze(3), im.unsqueeze(3)], 3)
-
-
