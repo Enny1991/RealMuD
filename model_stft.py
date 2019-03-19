@@ -579,7 +579,7 @@ class Mud(nn.Module):
 
 
 class Mudv3(nn.Module):
-    def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=32, sep_ch=64, kernel=(3, 3), causal=False, layers=6,
+    def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=16, sep_ch=64, kernel=(2, 2), causal=False, layers=6,
                  stacks=2, verbose=True):
         super(Mudv3, self).__init__()
         if verbose:
@@ -595,9 +595,6 @@ class Mudv3(nn.Module):
         self.enc_LN = tLN(2)
         self.BN = nn.Conv2d(2, self.BN_channel, (1, 1))
 
-        self.compression = nn.Parameter(torch.ones(1, ) * -0.8475, requires_grad=learn_comp)  # sigmoid(-0.8475) = 0.3
-        if verbose:
-            print("Compression: {}".format(torch.sigmoid(self.compression)))
         self.layer = layers
         self.stack = stacks
 
@@ -700,7 +697,7 @@ class Mudv3(nn.Module):
 
 
 class Mudv3noFFT(nn.Module):
-    def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=32, sep_ch=64, kernel=(3, 3), causal=False, layers=6,
+    def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=16, sep_ch=64, kernel=(2, 2), causal=False, layers=6,
                  stacks=2, verbose=True):
         super(Mudv3noFFT, self).__init__()
         if verbose:
@@ -716,9 +713,6 @@ class Mudv3noFFT(nn.Module):
         self.enc_LN = tLN(2)
         self.BN = nn.Conv2d(2, self.BN_channel, (1, 1))
 
-        self.compression = nn.Parameter(torch.ones(1, ) * -0.8475, requires_grad=learn_comp)  # sigmoid(-0.8475) = 0.3
-        if verbose:
-            print("Compression: {}".format(torch.sigmoid(self.compression)))
         self.layer = layers
         self.stack = stacks
 
@@ -746,6 +740,8 @@ class Mudv3noFFT(nn.Module):
         self.eps = 1e-8
 
     def forward(self, x):
+        # x = (B, 2, F, L)
+
         x_stft = x
 
         feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
@@ -763,4 +759,7 @@ class Mudv3noFFT(nn.Module):
         mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
 
         return mask_speech
+
+
+
 
