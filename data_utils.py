@@ -1,5 +1,6 @@
 import os
 import random
+import time
 
 import torch
 from scipy.signal import resample_poly
@@ -145,11 +146,15 @@ class MudNoise(Dataset):
         self.task = task
         self.max_len = max_len
 
-        self.data = h5py.File(path, 'r')
+        data = h5py.File(path, 'r')
 
+        if task == 'tr':
+            self.data = [data['{}{}'.format(task, j)] for j in range(10)]
+        else:
+            self.data = [data['{}{}'.format(task, j)] for j in range(5)]
         # self.len = 5000 if task == 'tr' else 1000
         # self.len = 20000 if task == 'tr' else 5000
-        self.len = 200 if task == 'tr' else 50
+        self.len = 1000 if task == 'tr' else 1000
 
         noises = []
         wav_files = [f for f in os.listdir(noisedir) if 'wav' in f]
@@ -162,26 +167,28 @@ class MudNoise(Dataset):
         self.n_ch = n_ch
 
     def __getitem__(self, index):
-
         divider = 2000 if self.task == 'tr' else 1000
         subset = index // divider
         ii = index % divider
-        s = self.data[self.task + "{}".format(subset)][ii][:self.n_ch, :self.max_len]
+        # s = self.data[self.task + "{}".format(subset)][ii][:self.n_ch, :self.max_len]
+
+        s = self.data[subset][ii][:self.n_ch, :self.max_len]
         while np.mean(np.abs(s[0])) == 0:
             index = np.random.choice(self.len)
             subset = index // divider
             ii = index % divider
-            s = self.data[self.task + "{}".format(subset)][ii]
+            # s = self.data[self.task + "{}".format(subset)][ii]
+            s = self.data[subset][ii][:self.n_ch, :self.max_len]
 
         s /= np.max(np.abs(s)) + 1e-15
         idx_noise = np.random.choice(range(len(self.noises)))
-        offset = np.random.choice(range(len(self.noises[idx_noise]) - s.shape[1] - 1))
-
+        # offset = np.random.choice(range(len(self.noises[idx_noise]) - s.shape[1] - 1))
+        #
+        offset = np.random.randint(10, len(self.noises[idx_noise]) - s.shape[1] - 1)
         mix = norm_mc_noise(s, self.noises[idx_noise][offset:offset + s.shape[1]], self.verbose)
 
         mix_tensor = torch.from_numpy(mix.astype('float32'))
         s1_tensor = torch.from_numpy(s.astype('float32'))
-
         return mix_tensor, s1_tensor
 
     def __len__(self):

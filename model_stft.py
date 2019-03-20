@@ -162,7 +162,7 @@ class DepthConv2d(nn.Module):
 
 class SimpleConv2d(nn.Module):
     def __init__(self, input_channel, hidden_channel, kernel,
-                 dilation=(1, 1), stride=(1, 1), padding=(0, 0), causal=False):
+                 dilation=(1, 1), stride=(1, 1), padding=(0, 0), causal=False, bn=False):
         super(SimpleConv2d, self).__init__()
 
         self.padding = padding
@@ -178,8 +178,14 @@ class SimpleConv2d(nn.Module):
 
         self.non_linearity = nn.PReLU()
 
+        self.bn = bn
+        self.reg = tLN(hidden_channel)
+
     def forward(self, inp):
-        output = self.non_linearity(self.linear(inp))
+        output = self.linear(inp)
+        if self.bn:
+            output = self.reg(output)
+        output = self.non_linearity(output)
         return output
 
     
@@ -580,7 +586,7 @@ class Mud(nn.Module):
 
 class Mudv3(nn.Module):
     def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=16, sep_ch=64, kernel=(2, 2), causal=False, layers=6,
-                 stacks=2, verbose=True):
+                 stacks=2, verbose=True, bn=False):
         super(Mudv3, self).__init__()
         if verbose:
             print("NFFT IS: {}".format(n_fft))
@@ -604,7 +610,7 @@ class Mudv3(nn.Module):
         for s in range(self.stack):
             for i in range(self.layer):
                 self.conv.append(SimpleConv2d(self.BN_channel, self.BN_channel,
-                                              self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                              self.kernel, bn=bn, dilation=(2 ** i, 2 ** i), causal=causal,
                                               padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
                 if s == 0 and i == 0:
                     self.receptive_field_time += self.kernel[0]

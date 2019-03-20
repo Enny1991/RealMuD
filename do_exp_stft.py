@@ -21,9 +21,11 @@ from train_test import train, test
 if getpass.getuser() == 'enea':
     datadir = '/Data/DATASETS/WSJ/mud_noise/'
     codedir = '/Data/Dropbox/PhD/Projects/realmud'
+    noisedir = '/Data/DATASETS/NoiseX/8k/'
 elif getpass.getuser() == 'jhjort':
-    datadir = '/work3/jhjort/biss/out/'
+    datadir = '/work3/jhjort/biss/'
     codedir = '/work3/jhjort/biss/'
+    noisedir = '/work3/jhjort/NoiseX/8k/'
 else:
     raise ValueError('unknown user')
 
@@ -57,7 +59,7 @@ def main(args):
     # global params
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
-        kwargs = {'num_workers': 1, 'pin_memory': True}
+        kwargs = {'num_workers': 3, 'pin_memory': True}
     else:
         kwargs = {}
 
@@ -66,13 +68,13 @@ def main(args):
     print("Preparing Loaders...")
 
     train_loader = DataLoader(
-        data_utils.MudNoise(training_data_path,  noisedir='/Data/DATASETS/NoiseX/8k/', task='tr', n_ch=6),
+        data_utils.MudNoise(training_data_path,  noisedir=noisedir, task='tr', n_ch=6),
         batch_size=args.batch_size,
         shuffle=True,
         **kwargs)
 
     validation_loader = DataLoader(
-        data_utils.MudNoise(validation_data_path, noisedir='/Data/DATASETS/NoiseX/8k/', task='cv', n_ch=6),
+        data_utils.MudNoise(validation_data_path, noisedir=noisedir, task='cv', n_ch=6),
         batch_size=args.batch_size,
         shuffle=False,
         **kwargs)
@@ -83,7 +85,7 @@ def main(args):
     # define model
 
     model = Mudv3(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
-                  layers=args.layers, stacks=args.stacks)
+                  layers=args.layers, stacks=args.stacks, bn=args.bn == 1)
 
     if args.load is not None:
         print("Loading model {}".format(args.load))
@@ -171,7 +173,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='tasnet-enhancement')
-    parser.add_argument('--batch-size', type=int, default=2,
+    parser.add_argument('--batch-size', type=int, default=32,
                         help='input batch size for training')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train')
@@ -189,6 +191,7 @@ if __name__ == "__main__":
     parser.add_argument('--hop', type=int, default=125)
     parser.add_argument('--kernel1', type=int, default=3)
     parser.add_argument('--kernel2', type=int, default=3)
+    parser.add_argument('--bn', type=int, default=0)
     parser.add_argument('--stacks', type=int, default=2)
     parser.add_argument('--nspk', type=int, default=2)
     parser.add_argument('--layers', type=int, default=6)
