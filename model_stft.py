@@ -704,7 +704,7 @@ class Mudv3(nn.Module):
 
 class Mudv3noFFT(nn.Module):
     def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=16, sep_ch=64, kernel=(2, 2), causal=False, layers=6,
-                 stacks=2, verbose=True):
+                 stacks=2, verbose=True, bn=False):
         super(Mudv3noFFT, self).__init__()
         if verbose:
             print("NFFT IS: {}".format(n_fft))
@@ -728,7 +728,7 @@ class Mudv3noFFT(nn.Module):
         for s in range(self.stack):
             for i in range(self.layer):
                 self.conv.append(SimpleConv2d(self.BN_channel, self.BN_channel,
-                                              self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                              self.kernel, bn=bn, dilation=(2 ** i, 2 ** i), causal=causal,
                                               padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
                 if s == 0 and i == 0:
                     self.receptive_field_time += self.kernel[0]
@@ -751,20 +751,18 @@ class Mudv3noFFT(nn.Module):
         x_stft = x
 
         feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
-        # mask estimationw
-        print("Mask estimation")
+
         this_input = feat
         skip_connection = 0.
         for i in range(len(self.conv)):
-            print("CONV {}".format(i))
             this_output = self.conv[i](this_input)
             skip_connection = skip_connection + this_output
             this_input = this_input + this_output
 
-        print("Reshape")
         mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
 
         return mask_speech
+
 
 
 
