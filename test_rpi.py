@@ -8,6 +8,7 @@ from torch import nn
 from torch.autograd import Variable
 import csv
 
+
 def load_mask_model(load, base_dir='./'):
     json_dir = base_dir + '/exp/' + load
     with open(json_dir + '/architecture.json', 'r') as fff:
@@ -21,6 +22,7 @@ def load_mask_model(load, base_dir='./'):
         model.load_state_dict(torch.load(load_path + 'model_weight_{}.pt'.format(mdl_idx)))
         _ = model.eval()
         return model, p
+
 
 mdl, _ = load_mask_model('201903104652_baseline2_C')
 

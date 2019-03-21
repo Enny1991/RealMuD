@@ -59,7 +59,7 @@ def main(args):
     # global params
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
-        kwargs = {'num_workers': 3, 'pin_memory': True}
+        kwargs = {'num_workers': 4, 'pin_memory': True}
     else:
         kwargs = {}
 
@@ -85,7 +85,7 @@ def main(args):
     # define model
 
     model = Mudv3(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
-                  layers=args.layers, stacks=args.stacks, bn=args.bn == 1)
+                  layers=args.layers, stacks=args.stacks, bn=args.bn == 1, bn_ch=args.bn_ch)
 
     if args.load is not None:
         print("Loading model {}".format(args.load))
@@ -189,6 +189,7 @@ if __name__ == "__main__":
     #                    help='path to save the best model')
     parser.add_argument('--nfft', type=int, default=512)
     parser.add_argument('--hop', type=int, default=125)
+    parser.add_argument('--bn_ch', type=int, default=16)
     parser.add_argument('--kernel1', type=int, default=3)
     parser.add_argument('--kernel2', type=int, default=3)
     parser.add_argument('--bn', type=int, default=0)

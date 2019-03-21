@@ -153,8 +153,8 @@ class MudNoise(Dataset):
         else:
             self.data = [data['{}{}'.format(task, j)] for j in range(5)]
         # self.len = 5000 if task == 'tr' else 1000
-        # self.len = 20000 if task == 'tr' else 5000
-        self.len = 1000 if task == 'tr' else 1000
+        self.len = 20000 if task == 'tr' else 5000
+        # self.len = 1000 if task == 'tr' else 1000
 
         noises = []
         wav_files = [f for f in os.listdir(noisedir) if 'wav' in f]
