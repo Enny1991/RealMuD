@@ -1,3 +1,4 @@
+librosa
 torch
 h5py
 soundfile
