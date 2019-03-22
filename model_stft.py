@@ -159,6 +159,31 @@ class DepthConv2d(nn.Module):
 
         return output
 
+class DepthConv2dv2(nn.Module):
+    def __init__(self, input_channel, hidden_channel, kernel,
+                 dilation=(1, 1), stride=(1, 1), padding=(0, 0), causal=False):
+        super(DepthConv2dv2, self).__init__()
+
+        self.padding = padding
+
+        if causal:
+            self.conv1d = CausalConv2d(input_channel, hidden_channel, kernel,
+                                       stride=stride,
+                                       dilation=dilation)
+        else:
+            self.conv1d = nn.Conv2d(input_channel, hidden_channel, kernel,
+                                    stride=stride, padding=self.padding,
+                                    dilation=dilation)
+
+        self.nonlinearity1 = nn.PReLU()
+
+        self.reg1 = tLN(hidden_channel)
+
+    def forward(self, input):
+        output = self.reg1(self.nonlinearity1(self.conv1d(input)))
+
+        return output
+
 
 class SimpleConv2d(nn.Module):
     def __init__(self, input_channel, hidden_channel, kernel,
@@ -450,6 +475,183 @@ def compress(x, compression=0.3):
     re = (mag ** compression) * torch.cos(ang)
     im = (mag ** compression) * torch.sin(ang)
     return torch.cat([re.unsqueeze(3), im.unsqueeze(3)], 3)
+
+
+class Mudv4(nn.Module):
+    def __init__(self, n_fft=256, hop=125, bn_ch=16, kernel=(3, 3), causal=False, layers=6,
+                 stacks=2, verbose=True):
+        super(Mudv4, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+        self.BN_channel = bn_ch
+        self.kernel = kernel
+        self.conv_pad = (int(np.log2((self.kernel[0] - 1) / 2)), int(np.log2((self.kernel[1] - 1) / 2)))
+
+        self.enc_LN = tLN(2)
+        self.BN = nn.Conv2d(2, self.BN_channel, (1, 1))
+
+        self.layer = layers
+        self.stack = stacks
+
+        self.receptive_field_time = 0
+        self.receptive_field_freq = 0
+        self.conv = nn.ModuleList([])
+        for s in range(self.stack):
+            for i in range(self.layer):
+                self.conv.append(DepthConv2d(self.BN_channel, self.BN_channel,
+                                             self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                             padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
+                if s == 0 and i == 0:
+                    self.receptive_field_time += self.kernel[0]
+                    self.receptive_field_freq += self.kernel[1]
+                else:
+                    self.receptive_field_time += (self.kernel[0] - 1) * 2 ** i
+                    self.receptive_field_freq += (self.kernel[1] - 1) * 2 ** i
+
+        if verbose:
+            print('Receptive field TIME: {:1d} samples.'.format(self.receptive_field_time))
+            print('Receptive field FREQ: {:1d} samples.'.format(self.receptive_field_freq))
+
+        self.reshape_speech = nn.Sequential(nn.Conv2d(self.BN_channel, 1, (1, 1)), nn.Sigmoid())
+
+        self.eps = 1e-8
+
+    def forward(self, x):
+        # x = (B, M, T)
+        _x = x[:, 0]  # (B, T)
+
+        batch_size = x.shape[0]
+        n_mic = x.shape[1]
+
+        win = torch.hann_window(self.FFT)
+
+        if _x.is_cuda:
+            win = win.cuda()
+
+        # input shape: B, T
+        all_mics = x.view(batch_size * n_mic, -1)  # (BxM, T)
+        all_mics_stft = torch.stft(all_mics, self.FFT, self.HOP, window=win)  # (BxM, F, L, 2)
+
+        all_mics_stft = all_mics_stft.contiguous().view(batch_size, n_mic, all_mics_stft.shape[1],
+                                                        all_mics_stft.shape[2], 2)  # (B, M, F, L, 2)
+        x_stft = all_mics_stft[:, 0]  # (B, F, L, 2)
+
+        x_stft = x_stft.permute(0, 3, 1, 2)  # (B, 2, F, L)
+
+        feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
+        # mask estimation
+
+        this_input = feat
+        skip_connection = 0.
+        for i in range(len(self.conv)):
+            this_output = self.conv[i](this_input)
+            skip_connection = skip_connection + this_output
+            this_input = this_input + this_output
+
+        # mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
+        mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
+        mask_noise = 1. - mask_speech
+
+        observation = all_mics_stft.permute(0, 2, 4, 1, 3)  # (B, F, 2, M, L)
+        # calculate psds
+        psd_noise = complex_psd(observation, mask_noise, normalize=False)  # (B, F, 2, M, M)
+        psd_speech = complex_psd(observation, mask_speech, condition=True)  # (B, F, 2, M, M)
+
+        psd_noise_cond = condition_covariance(psd_noise, 1e-6)
+        psd_noise_norm = psd_noise_cond / trace(psd_noise_cond, dim1=-1, dim2=-2, keepdim=True)[:, :, 0].unsqueeze(2)
+
+        # calculate weights
+        # speech A
+        # noise B
+        re_a = psd_speech[:, :, 0]
+        im_a = psd_speech[:, :, 1]
+        re_b = psd_noise_norm[:, :, 0]
+        im_b = psd_noise_norm[:, :, 1]
+
+        a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
+        b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
+        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+
+        trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
+        h_norm = h / trace_h
+
+        h_re, h_im = h_norm[..., :n_mic, 0], h_norm[..., n_mic:, 0]
+
+        # apply weights
+        a = h_re  # (B, F, M)
+        b = -h_im
+        c = observation[:, :, 0].permute(0, 2, 1, 3)  # (B, M, F, L)
+        d = observation[:, :, 1].permute(0, 2, 1, 3)  # (B, M, F, L)
+
+        real = einsum(a, c, '...ab,...bac->...ac') - einsum(b, d, '...ab,...bac->...ac')
+        imag = einsum(a, d, '...ab,...bac->...ac') + einsum(b, c, '...ab,...bac->...ac')  # (B, F, L)
+
+        filtered = torch.cat([real.unsqueeze(-1), imag.unsqueeze(-1)], -1)  # B, F, T, 2
+        output = my_istft(filtered, hop_length=self.HOP, cuda=filtered.is_cuda)  # B, T
+
+        return output
+
+
+class Mudv4noFFT(nn.Module):
+    def __init__(self, n_fft=256, hop=125, bn_ch=16, kernel=(3, 3), causal=False, layers=6,
+                 stacks=2, verbose=True):
+        super(Mudv4noFFT, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+        self.BN_channel = bn_ch
+        self.kernel = kernel
+        self.conv_pad = (int(np.log2((self.kernel[0] - 1) / 2)), int(np.log2((self.kernel[1] - 1) / 2)))
+
+        self.enc_LN = tLN(2)
+        self.BN = nn.Conv2d(2, self.BN_channel, (1, 1))
+
+        self.layer = layers
+        self.stack = stacks
+
+        self.receptive_field_time = 0
+        self.receptive_field_freq = 0
+        self.conv = nn.ModuleList([])
+        for s in range(self.stack):
+            for i in range(self.layer):
+                self.conv.append(DepthConv2d(self.BN_channel, self.BN_channel,
+                                             self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                             padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
+                if s == 0 and i == 0:
+                    self.receptive_field_time += self.kernel[0]
+                    self.receptive_field_freq += self.kernel[1]
+                else:
+                    self.receptive_field_time += (self.kernel[0] - 1) * 2 ** i
+                    self.receptive_field_freq += (self.kernel[1] - 1) * 2 ** i
+
+        if verbose:
+            print('Receptive field TIME: {:1d} samples.'.format(self.receptive_field_time))
+            print('Receptive field FREQ: {:1d} samples.'.format(self.receptive_field_freq))
+
+        self.reshape_speech = nn.Sequential(nn.Conv2d(self.BN_channel, 1, (1, 1)), nn.Sigmoid())
+
+        self.eps = 1e-8
+
+    def forward(self, x):
+        x_stft = x
+
+        feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
+
+        this_input = feat
+        skip_connection = 0.
+        for i in range(len(self.conv)):
+            this_output = self.conv[i](this_input)
+            skip_connection = skip_connection + this_output
+            this_input = this_input + this_output
+
+        mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
+
+        return mask_speech
 
 
 class Mud(nn.Module):

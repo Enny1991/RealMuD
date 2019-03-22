@@ -15,7 +15,7 @@ from logger import Logger
 import getpass
 
 # prepare exp folder
-from model_stft import Mud, Mudv2, Mudv3
+from model_stft import Mud, Mudv2, Mudv3, Mudv4
 from train_test import train, test
 
 if getpass.getuser() == 'enea':
@@ -84,8 +84,8 @@ def main(args):
     print("Creating Model...")
     # define model
 
-    model = Mudv3(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
-                  layers=args.layers, stacks=args.stacks, bn=args.bn == 1, bn_ch=args.bn_ch)
+    model = Mudv4(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
+                  layers=args.layers, stacks=args.stacks, bn_ch=args.bn_ch)
 
     if args.load is not None:
         print("Loading model {}".format(args.load))
@@ -173,7 +173,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='tasnet-enhancement')
-    parser.add_argument('--batch-size', type=int, default=32,
+    parser.add_argument('--batch-size', type=int, default=8,
                         help='input batch size for training')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train')
