@@ -503,7 +503,7 @@ class Mudv4(nn.Module):
         self.conv = nn.ModuleList([])
         for s in range(self.stack):
             for i in range(self.layer):
-                self.conv.append(DepthConv2d(self.BN_channel, self.BN_channel,
+                self.conv.append(DepthConv2dv2(self.BN_channel, self.BN_channel,
                                              self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
                                              padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
                 if s == 0 and i == 0:
@@ -621,9 +621,9 @@ class Mudv4noFFT(nn.Module):
         self.conv = nn.ModuleList([])
         for s in range(self.stack):
             for i in range(self.layer):
-                self.conv.append(DepthConv2d(self.BN_channel, self.BN_channel,
-                                             self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
-                                             padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
+                self.conv.append(DepthConv2dv2(self.BN_channel, self.BN_channel,
+                                               self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                               padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
                 if s == 0 and i == 0:
                     self.receptive_field_time += self.kernel[0]
                     self.receptive_field_freq += self.kernel[1]
@@ -662,7 +662,7 @@ class Mudv4noFFT(nn.Module):
 
 class Mud(nn.Module):
     def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=32, sep_ch=64, kernel=(3, 3), causal=False, layers=6,
-                 stacks=2, verbose=True):
+                 stacks=2, verbose=True, ret_mask=False):
         super(Mud, self).__init__()
         if verbose:
             print("NFFT IS: {}".format(n_fft))
@@ -685,6 +685,7 @@ class Mud(nn.Module):
 
         self.receptive_field_time = 0
         self.receptive_field_freq = 0
+        self.ret_mask = ret_mask
         self.conv = nn.ModuleList([])
         for s in range(self.stack):
             for i in range(self.layer):
@@ -788,8 +789,80 @@ class Mud(nn.Module):
 
         # filtered = mask_speech.squeeze(2) * x_stft.permute(0, 2, 1, 3)
         # output = my_istft(filtered.permute(0, 1, 3, 2), hop_length=self.HOP, cuda=filtered.is_cuda)  # B, T
+        if not self.ret_mask:
+            return output
+        else:
+            return output, mask_speech, mask_noise
 
-        return output
+
+class MudnoFFT(nn.Module):
+    def __init__(self, n_fft=256, hop=125, learn_comp=False, bn_ch=32, sep_ch=64, kernel=(3, 3), causal=False, layers=6,
+                 stacks=2, verbose=True):
+        super(MudnoFFT, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+        self.BN_channel = bn_ch
+        self.conv_channel = sep_ch
+        self.kernel = kernel
+        self.conv_pad = (int(np.log2((self.kernel[0] - 1) / 2)), int(np.log2((self.kernel[1] - 1) / 2)))
+
+        self.enc_LN = tLN(2)
+        self.BN = nn.Conv2d(2, self.BN_channel, (1, 1))
+
+        self.compression = nn.Parameter(torch.ones(1, ) * -0.8475, requires_grad=learn_comp)  # sigmoid(-0.8475) = 0.3
+        if verbose:
+            print("Compression: {}".format(torch.sigmoid(self.compression)))
+        self.layer = layers
+        self.stack = stacks
+
+        self.receptive_field_time = 0
+        self.receptive_field_freq = 0
+        self.conv = nn.ModuleList([])
+        for s in range(self.stack):
+            for i in range(self.layer):
+                self.conv.append(DepthConv2d(self.BN_channel, self.conv_channel,
+                                             self.kernel, dilation=(2 ** i, 2 ** i), causal=causal,
+                                             padding=(2 ** (i + self.conv_pad[0]), 2 ** (i + self.conv_pad[1]))))
+                if s == 0 and i == 0:
+                    self.receptive_field_time += self.kernel[0]
+                    self.receptive_field_freq += self.kernel[1]
+                else:
+                    self.receptive_field_time += (self.kernel[0] - 1) * 2 ** i
+                    self.receptive_field_freq += (self.kernel[1] - 1) * 2 ** i
+
+        if verbose:
+            print('Receptive field TIME: {:1d} samples.'.format(self.receptive_field_time))
+            print('Receptive field FREQ: {:1d} samples.'.format(self.receptive_field_freq))
+
+        self.reshape_env = nn.Sequential(nn.Conv1d(1, self.n_fft, 1),
+                                         # nn.ReLU()
+                                         )
+        if verbose:
+            print(self.reshape_env)
+
+        # self.reshape_noise = nn.Sequential(nn.Conv2d(self.BN_channel, 1, (1, 1)), nn.Sigmoid())
+        self.reshape_speech = nn.Sequential(nn.Conv2d(self.BN_channel, 1, (1, 1)), nn.Sigmoid())
+
+        self.eps = 1e-8
+
+    def forward(self, x):
+        x_stft = x
+
+        feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
+
+        this_input = feat
+        skip_connection = 0.
+        for i in range(len(self.conv)):
+            this_output = self.conv[i](this_input)
+            skip_connection = skip_connection + this_output
+            this_input = this_input + this_output
+
+        mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
+
+        return mask_speech
 
 
 class Mudv3(nn.Module):
