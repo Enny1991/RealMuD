@@ -1,3 +1,5 @@
+import time
+
 import torch
 import numpy as np
 from torch import nn
@@ -640,14 +642,18 @@ class Mudv4noFFT(nn.Module):
     def forward(self, x):
         x_stft = x
 
+        st = time.time()
         feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
+        print("reshape {}".format(time.time() - st))
 
         this_input = feat
         skip_connection = 0.
         for i in range(len(self.conv)):
+            st = time.time()
             this_output = self.conv[i](this_input)
             skip_connection = skip_connection + this_output
             this_input = this_input + this_output
+            print("conv {} in {}".format(i, time.time() - st))
 
         mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
 
