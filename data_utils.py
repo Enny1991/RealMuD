@@ -121,9 +121,10 @@ def pad_sequences(sequences, dtype='float32', padding='pre', truncating='pre', v
 
 def norm_mc_noise(x, noise, verbose):
     ret = np.zeros_like(x)
+    all_noise = np.zeros_like(x)
     snr = np.random.rand() * 7.5 - 5.0
-    if verbose:
-        print("SNR: %.2f" % snr)
+    # if verbose:
+    #     print("SNR: %.2f" % snr)
     pow_noise = np.mean((noise - np.mean(noise)) ** 2.)
     noise /= np.sqrt(pow_noise) + 1e-12
     for i in range(x.shape[0]):
@@ -133,7 +134,12 @@ def norm_mc_noise(x, noise, verbose):
 
         factor = np.sqrt(pow_sig / (10 ** (snr / 10.)))
         ret[i] = x[i] + noise * factor
-    return ret
+        all_noise[i] = noise * factor
+
+    if verbose:
+        return ret, all_noise
+    else:
+        return ret
 
 
 class MudNoise(Dataset):
@@ -187,9 +193,16 @@ class MudNoise(Dataset):
         offset = np.random.randint(10, len(self.noises[idx_noise]) - s.shape[1] - 1)
         mix = norm_mc_noise(s, self.noises[idx_noise][offset:offset + s.shape[1]], self.verbose)
 
+        if self.verbose:
+            mix, n = mix
+
         mix_tensor = torch.from_numpy(mix.astype('float32'))
         s1_tensor = torch.from_numpy(s.astype('float32'))
-        return mix_tensor, s1_tensor
+
+        if self.verbose:
+            return mix_tensor, s1_tensor, n
+        else:
+            return mix_tensor, s1_tensor
 
     def __len__(self):
         return self.len

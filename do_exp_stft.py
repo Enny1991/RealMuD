@@ -15,7 +15,7 @@ from logger import Logger
 import getpass
 
 # prepare exp folder
-from model_stft import Mud, Mudv2, Mudv3, Mudv4
+from model_stft import Mud, Mudv2, Mudv3, Mudv4, Mudv5
 from train_test import train, test
 
 if getpass.getuser() == 'enea':
@@ -84,7 +84,7 @@ def main(args):
     print("Creating Model...")
     # define model
 
-    model = Mudv4(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
+    model = Mudv5(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
                   layers=args.layers, stacks=args.stacks, bn_ch=args.bn_ch)
 
     if args.load is not None:

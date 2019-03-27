@@ -35,7 +35,7 @@ def train(model, train_loader, optimizer, epoch, args):
         loss = - sSDR(recon, clean)
         show_loss = loss
         total_loss = loss
-        # print(-show_loss.data.item() * CONST)
+        print(-show_loss.data.item() * CONST)
         total_loss.backward()
         train_loss += show_loss.data.item() * CONST
         optimizer.step()

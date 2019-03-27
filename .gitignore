@@ -5,3 +5,5 @@
 *.npy
 *.pyc
 .idea/
+/paper/
+*.onnx
