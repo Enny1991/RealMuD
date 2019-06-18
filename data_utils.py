@@ -177,7 +177,6 @@ class MudNoise(Dataset):
         subset = index // divider
         ii = index % divider
         # s = self.data[self.task + "{}".format(subset)][ii][:self.n_ch, :self.max_len]
-
         s = self.data[subset][ii][:self.n_ch, :self.max_len]
         while np.mean(np.abs(s[0])) == 0:
             index = np.random.choice(self.len)

@@ -784,6 +784,186 @@ class Mudv5(nn.Module):
         return output
 
 
+class Mudv5LSTM(nn.Module):
+    def __init__(self, n_fft=256, hop=125, n_hid=256, n_hid_ff=513, verbose=True, bidir=False):
+        super(Mudv5LSTM, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+
+        self.lstm = nn.LSTM(input_size=self.n_fft * 2, hidden_size=n_hid, batch_first=True, bidirectional=bidir)
+        self.ff1 = nn.Linear(n_hid if not bidir else n_hid * 2, n_hid_ff)
+        self.ff2 = nn.Linear(n_hid_ff, n_hid_ff)
+        self.ff3 = nn.Linear(n_hid_ff, self.n_fft)
+
+    def forward(self, x):
+        # x = (B, M, T)
+        _x = x[:, 0]  # (B, T)
+
+        batch_size = x.shape[0]
+        n_mic = x.shape[1]
+
+        win = torch.hann_window(self.FFT)
+
+        if _x.is_cuda:
+            win = win.cuda()
+
+        # input shape: B, T
+        all_mics = x.view(batch_size * n_mic, -1)  # (BxM, T)
+        all_mics_stft = torch.stft(all_mics, self.FFT, self.HOP, window=win)  # (BxM, F, L, 2)
+
+        all_mics_stft = all_mics_stft.contiguous().view(batch_size, n_mic, all_mics_stft.shape[1],
+                                                        all_mics_stft.shape[2], 2)  # (B, M, F, L, 2)
+        x_stft = all_mics_stft[:, 0]  # (B, F, L, 2)
+
+        x_stft = x_stft.permute(0, 2, 1, 3)  # (B, L, F, 2)
+
+        x_input_lstm = x_stft.contiguous().view(batch_size, x_stft.shape[1], -1)  # (B, L, F*2)
+
+        out_lstm, _ = self.lstm(x_input_lstm)  # (B, L, 256)
+
+        out1 = torch.relu(self.ff1(out_lstm))  # (B, L, 513)
+        out2 = torch.relu(self.ff2(out1))  # (B, L, 513)
+        out3 = torch.sigmoid(self.ff3(out2))  # (B, L, F)
+
+        mask_speech = out3.permute(0, 2, 1).unsqueeze(2).unsqueeze(2)  # B, F, 1, 1, T
+        mask_noise = 1. - mask_speech
+
+        observation = all_mics_stft.permute(0, 2, 4, 1, 3)  # (B, F, 2, M, L)
+        # calculate psds
+        psd_noise = complex_psd(observation, mask_noise, normalize=False)  # (B, F, 2, M, M)
+        psd_speech = complex_psd(observation, mask_speech, condition=True)  # (B, F, 2, M, M)
+
+        psd_noise_cond = condition_covariance(psd_noise, 1e-6)
+        psd_noise_norm = psd_noise_cond / trace(psd_noise_cond, dim1=-1, dim2=-2, keepdim=True)[:, :, 0].unsqueeze(2)
+
+        # calculate weights
+        # speech A
+        # noise B
+        re_a = psd_speech[:, :, 0]
+        im_a = psd_speech[:, :, 1]
+        re_b = psd_noise_norm[:, :, 0]
+        im_b = psd_noise_norm[:, :, 1]
+
+        a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
+        b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
+        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+
+        trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
+        h_norm = h / trace_h
+
+        h_re, h_im = h_norm[..., :n_mic, 0], h_norm[..., n_mic:, 0]
+
+        # apply weights
+        a = h_re  # (B, F, M)
+        b = -h_im
+        c = observation[:, :, 0].permute(0, 2, 1, 3)  # (B, M, F, L)
+        d = observation[:, :, 1].permute(0, 2, 1, 3)  # (B, M, F, L)
+
+        real = einsum(a, c, '...ab,...bac->...ac') - einsum(b, d, '...ab,...bac->...ac')
+        imag = einsum(a, d, '...ab,...bac->...ac') + einsum(b, c, '...ab,...bac->...ac')  # (B, F, L)
+
+        filtered = torch.cat([real.unsqueeze(-1), imag.unsqueeze(-1)], -1)  # B, F, T, 2
+        output = my_istft(filtered, hop_length=self.HOP, cuda=filtered.is_cuda)  # B, T
+
+        return output
+
+
+class Mudv5FF(nn.Module):
+    def __init__(self, n_fft=256, hop=125, n_hid_ff=514, verbose=True):
+        super(Mudv5FF, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+
+        self.ff1 = nn.Linear(self.n_fft, n_hid_ff, bias=False)
+        self.ff2 = nn.Linear(n_hid_ff, n_hid_ff, bias=False)
+        self.ff3 = nn.Linear(n_hid_ff, self.n_fft, bias=False)
+
+    def forward(self, x):
+        # x = (B, M, T)
+        _x = x[:, 0]  # (B, T)
+
+        batch_size = x.shape[0]
+        n_mic = x.shape[1]
+
+        win = torch.hann_window(self.FFT)
+
+        if _x.is_cuda:
+            win = win.cuda()
+
+        # input shape: B, T
+        all_mics = x.view(batch_size * n_mic, -1)  # (BxM, T)
+        all_mics_stft = torch.stft(all_mics, self.FFT, self.HOP, window=win)  # (BxM, F, L, 2)
+
+        all_mics_stft = all_mics_stft.contiguous().view(batch_size, n_mic, all_mics_stft.shape[1],
+                                                        all_mics_stft.shape[2], 2)  # (B, M, F, L, 2)
+        x_stft = all_mics_stft[:, 0]  # (B, F, L, 2)
+
+        x_stft = x_stft.permute(0, 2, 1, 3)  # (B, L, F, 2)
+
+        x_input = x_stft[:, :, :, 0] ** 2  # (B, L, F*2)
+
+        out1 = torch.relusongoldon\
+            (self.ff1(x_input))  # (B, L, 513)
+        # print(f"out1: {out1.mean()}")
+        out2 = torch.relu(self.ff2(out1))  # (B, L, 513)
+        # print(f"out1: {out2.mean()}")
+        out3 = torch.sigmoid(self.ff3(out2))  # (B, L, F)
+        # print(f"out3: {out3.mean()}")
+
+        mask_speech = out3.permute(0, 2, 1).unsqueeze(2).unsqueeze(2)  # B, F, 1, 1, T
+        mask_noise = 1. - mask_speech
+
+        observation = all_mics_stft.permute(0, 2, 4, 1, 3)  # (B, F, 2, M, L)
+        # calculate psds
+        psd_noise = complex_psd(observation, mask_noise, normalize=False)  # (B, F, 2, M, M)
+        psd_speech = complex_psd(observation, mask_speech, condition=True)  # (B, F, 2, M, M)
+        # print(f"psd sp: {psd_speech.mean()}")
+        # print(f"psd noi: {psd_noise.mean()}")
+        psd_noise_cond = condition_covariance(psd_noise, 1e-6)
+        # print(f"psd noi norm: {psd_noise_norm.mean()}")
+        print(trace(psd_noise_cond, dim1=-1, dim2=-2).shape)
+
+        psd_noise_norm = psd_noise_cond / (trace(psd_noise_cond, dim1=-1, dim2=-2, keepdim=True)[:, :, 0].unsqueeze(2))
+        print(f"psd: {psd_noise_norm.sum(1).sum(1)}")
+
+        # calculate weights
+        # speech A
+        # noise B
+        re_a = psd_speech[:, :, 0]
+        im_a = psd_speech[:, :, 1]
+        re_b = psd_noise_norm[:, :, 0]
+        im_b = psd_noise_norm[:, :, 1]
+
+        a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
+        b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
+        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+
+        trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
+        h_norm = h / trace_h
+
+        h_re, h_im = h_norm[..., :n_mic, 0], h_norm[..., n_mic:, 0]
+
+        # apply weights
+        a = h_re  # (B, F, M)
+        b = -h_im
+        c = observation[:, :, 0].permute(0, 2, 1, 3)  # (B, M, F, L)
+        d = observation[:, :, 1].permute(0, 2, 1, 3)  # (B, M, F, L)
+
+        real = einsum(a, c, '...ab,...bac->...ac') - einsum(b, d, '...ab,...bac->...ac')
+        imag = einsum(a, d, '...ab,...bac->...ac') + einsum(b, c, '...ab,...bac->...ac')  # (B, F, L)
+
+        filtered = torch.cat([real.unsqueeze(-1), imag.unsqueeze(-1)], -1)  # B, F, T, 2
+        output = my_istft(filtered, hop_length=self.HOP, cuda=filtered.is_cuda)  # B, T
+
+        return output
+
+
 class Mudv4noFFT(nn.Module):
     def __init__(self, n_fft=256, hop=125, bn_ch=16, kernel=(3, 3), causal=False, layers=6,
                  stacks=2, verbose=True):
@@ -843,6 +1023,38 @@ class Mudv4noFFT(nn.Module):
             print("conv {} in {}".format(i, time.time() - st))
 
         mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3).unsqueeze(2)  # B, F, 1, 1, T
+
+        return mask_speech
+
+
+class Mudv5LSTMnoFFT(nn.Module):
+    def __init__(self, n_fft=256, hop=125, n_hid=256, n_hid_ff=513, verbose=True):
+        super(Mudv5LSTMnoFFT, self).__init__()
+        if verbose:
+            print("NFFT IS: {}".format(n_fft))
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+
+        self.lstm = nn.LSTM(input_size=self.n_fft * 2, hidden_size=n_hid)
+        self.ff1 = nn.Linear(n_hid, n_hid_ff)
+        self.ff2 = nn.Linear(n_hid_ff, n_hid_ff)
+        self.ff3 = nn.Linear(n_hid_ff, self.n_fft)
+
+    def forward(self, x):
+
+        x_stft = x.permute(0, 2, 1, 3)  # (B, L, F, 2)
+
+        x_input_lstm = x_stft.contiguous().view(x_stft.shape[0], x_stft.shape[1], -1)  # (B, L, F*2)
+
+        out_lstm, _ = self.lstm(x_input_lstm)  # (B, L, 256)
+        out_lstm2 = out_lstm.contiguous().permute(1, 0, 2)
+
+        out1 = torch.relu(self.ff1(out_lstm2))  # (B, L, 513)
+        out2 = torch.relu(self.ff2(out1))  # (B, L, 513)
+        out3 = torch.sigmoid(self.ff3(out2))  # (B, L, F)
+
+        mask_speech = out3.permute(0, 2, 1).unsqueeze(2).unsqueeze(2)  # B, F, 1, 1, T
 
         return mask_speech
 

@@ -15,7 +15,7 @@ from logger import Logger
 import getpass
 
 # prepare exp folder
-from model_stft import Mud, Mudv2, Mudv3, Mudv4, Mudv5
+from model_stft import Mud, Mudv2, Mudv3, Mudv4, Mudv5, Mudv5LSTM, Mudv5FF
 from train_test import train, test
 
 if getpass.getuser() == 'enea':
@@ -84,8 +84,12 @@ def main(args):
     print("Creating Model...")
     # define model
 
-    model = Mudv5(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
-                  layers=args.layers, stacks=args.stacks, bn_ch=args.bn_ch)
+    # model = Mudv5(n_fft=args.nfft, hop=args.hop, kernel=(args.kernel1, args.kernel2), causal=args.causal == 1,
+    #               layers=args.layers, stacks=args.stacks, bn_ch=args.bn_ch)
+
+    # model = Mudv5LSTM(n_fft=args.nfft, hop=args.hop, bidir=True)
+
+    model = Mudv5FF(n_fft=args.nfft, hop=args.hop)
 
     if args.load is not None:
         print("Loading model {}".format(args.load))
@@ -173,13 +177,13 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='tasnet-enhancement')
-    parser.add_argument('--batch-size', type=int, default=8,
+    parser.add_argument('--batch-size', type=int, default=2,
                         help='input batch size for training')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train')
     parser.add_argument('--cuda', action='store_true', default=True,
                         help='enables CUDA training')
-    parser.add_argument('--lr', type=float, default=1e-3,
+    parser.add_argument('--lr', type=float, default=1e-4,
                         help='learning rate')
     parser.add_argument('--noise', type=float, default=0.0,
                         help='noise envelope')

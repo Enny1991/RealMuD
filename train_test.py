@@ -28,14 +28,13 @@ def train(model, train_loader, optimizer, epoch, args):
             batch_s1 = batch_s1.cuda()
 
         optimizer.zero_grad()
-
         # SDR as objective
         clean = batch_s1
         recon = model(batch_infeat)
         loss = - sSDR(recon, clean)
         show_loss = loss
         total_loss = loss
-        print(-show_loss.data.item() * CONST)
+        # print(-show_loss.data.item() * CONST)
         total_loss.backward()
         train_loss += show_loss.data.item() * CONST
         optimizer.step()
