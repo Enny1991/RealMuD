@@ -193,7 +193,7 @@ if __name__ == "__main__":
     #                    help='path to save the best model')
     parser.add_argument('--nfft', type=int, default=512)
     parser.add_argument('--hop', type=int, default=125)
-    parser.add_argument('--bn_ch', type=int, default=16)
+    parser.add_argument('--bn_ch', type=int, default=8)
     parser.add_argument('--kernel1', type=int, default=3)
     parser.add_argument('--kernel2', type=int, default=3)
     parser.add_argument('--bn', type=int, default=0)

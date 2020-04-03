@@ -7,3 +7,12 @@
 .idea/
 /paper/
 *.onnx
+*.txt
+*.csv
+*.pdf
+*.jpg
+*.png
+*.pkl
+*.pb
+__pycache__/
+out/

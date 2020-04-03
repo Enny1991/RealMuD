@@ -215,7 +215,7 @@ class DepthConv2dv3(nn.Module):
         output = self.reg1(self.nonlinearity1(self.conv1d(input)))
         if self.causal:
             # output = output[:, :, :, :-self.dilation * (self.size - 1)]
-            output = output[..., :128]
+            output = output[..., :257]
         return output
 
 
@@ -429,7 +429,7 @@ class Mudv2(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
@@ -633,6 +633,7 @@ class Mudv4(nn.Module):
 
         # calculate weights
         # speech A
+        # speech A
         # noise B
         re_a = psd_speech[:, :, 0]
         im_a = psd_speech[:, :, 1]
@@ -641,7 +642,7 @@ class Mudv4(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
@@ -762,7 +763,7 @@ class Mudv5(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
@@ -849,7 +850,7 @@ class Mudv5LSTM(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
@@ -908,8 +909,7 @@ class Mudv5FF(nn.Module):
 
         x_input = x_stft[:, :, :, 0] ** 2  # (B, L, F*2)
 
-        out1 = torch.relusongoldon\
-            (self.ff1(x_input))  # (B, L, 513)
+        out1 = torch.relu(self.ff1(x_input))  # (B, L, 513)
         # print(f"out1: {out1.mean()}")
         out2 = torch.relu(self.ff2(out1))  # (B, L, 513)
         # print(f"out1: {out2.mean()}")
@@ -927,10 +927,8 @@ class Mudv5FF(nn.Module):
         # print(f"psd noi: {psd_noise.mean()}")
         psd_noise_cond = condition_covariance(psd_noise, 1e-6)
         # print(f"psd noi norm: {psd_noise_norm.mean()}")
-        print(trace(psd_noise_cond, dim1=-1, dim2=-2).shape)
 
         psd_noise_norm = psd_noise_cond / (trace(psd_noise_cond, dim1=-1, dim2=-2, keepdim=True)[:, :, 0].unsqueeze(2))
-        print(f"psd: {psd_noise_norm.sum(1).sum(1)}")
 
         # calculate weights
         # speech A
@@ -942,7 +940,7 @@ class Mudv5FF(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
@@ -964,6 +962,32 @@ class Mudv5FF(nn.Module):
         return output
 
 
+class Mudv5FFnoFFT(nn.Module):
+    def __init__(self, n_fft=256, hop=125, n_hid_ff=514, verbose=True):
+        super(Mudv5FFnoFFT, self).__init__()
+
+        self.n_fft = (n_fft // 2 + 1)
+        self.FFT = n_fft
+        self.HOP = hop
+
+        self.ff1 = nn.Linear(self.n_fft, n_hid_ff, bias=False)
+        self.ff2 = nn.Linear(n_hid_ff, n_hid_ff, bias=False)
+        self.ff3 = nn.Linear(n_hid_ff, self.n_fft, bias=False)
+
+    def forward(self, x):
+
+        out1 = torch.relu(self.ff1(x))  # (B, L, 513)
+        # print(f"out1: {out1.mean()}")
+        out2 = torch.relu(self.ff2(out1))  # (B, L, 513)
+        # print(f"out1: {out2.mean()}")
+        out3 = torch.sigmoid(self.ff3(out2))  # (B, L, F)
+        # print(f"out3: {out3.mean()}")
+
+        mask_speech = out3.permute(0, 2, 1).unsqueeze(2).unsqueeze(2)  # B, F, 1, 1, T
+       
+        return mask_speech
+    
+    
 class Mudv4noFFT(nn.Module):
     def __init__(self, n_fft=256, hop=125, bn_ch=16, kernel=(3, 3), causal=False, layers=6,
                  stacks=2, verbose=True):
@@ -1110,7 +1134,6 @@ class Mudv5noFFT(nn.Module):
 
         st = time.time()
         feat = self.BN(self.enc_LN(x_stft))  # (B, BN, F, L)
-        print("reshape {}".format(time.time() - st))
 
         this_input = feat
         skip_connection = 0.
@@ -1119,7 +1142,6 @@ class Mudv5noFFT(nn.Module):
             this_output = self.conv[i](this_input)
             skip_connection = skip_connection + this_output
             this_input = this_input + this_output
-            print("conv {} in {}".format(i, time.time() - st))
 
         mask_speech = self.reshape_speech(skip_connection).permute(0, 2, 1, 3)  # B, F, 1, 1, T
 
@@ -1296,7 +1318,7 @@ class Mud(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
@@ -1489,7 +1511,7 @@ class Mudv3(nn.Module):
 
         a = torch.cat([torch.cat([re_a, -im_a], -1), torch.cat([im_a, re_a], -1)], -2)
         b = torch.cat([torch.cat([re_b, -im_b], -1), torch.cat([im_b, re_b], -1)], -2)
-        h, _ = torch.gesv(a, b)  # (B, F, 2, M, M)
+        h, _ = torch.solve(a, b)  # (B, F, 2, M, M)
 
         trace_h = trace(h, keepdim=True)  # (B, F, 2, 1, 1)
         h_norm = h / trace_h
